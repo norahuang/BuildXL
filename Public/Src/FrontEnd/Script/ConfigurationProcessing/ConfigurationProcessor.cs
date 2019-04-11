@@ -80,6 +80,13 @@ namespace BuildXL.FrontEnd.Script
                 return null;
             }
 
+
+            // Apply Additional configurations from the commandline
+            foreach (var additionalConfigurationFile in commandLineConfiguration.Startup.AdditionalConfigFiles)
+            {
+                configObjectLiteral = ParseAndInterpretAdditionalConfigFile(additionalConfigurationFile, configObjectLiteral);
+            }
+
             // TODO: user override is not really working now. Fix me!
 
             try
@@ -146,6 +153,11 @@ namespace BuildXL.FrontEnd.Script
             return ParseAndInterpretConfigFileAsync(configPath).GetAwaiter().GetResult();
         }
 
+        private ObjectLiteral ParseAndInterpretAdditionalConfigFile(AbsolutePath additionalConfigPath, ObjectLiteral configObjectLiteral)
+        {
+            return ParseInterpretAdditionalConfigFileAndMergeAsync(additionalConfigPath, configObjectLiteral).GetAwaiter().GetResult();
+        }
+
         private async Task<ObjectLiteral> ParseAndInterpretConfigFileAsync(AbsolutePath configPath)
         {
             Contract.Requires(configPath.IsValid);
@@ -177,6 +189,39 @@ namespace BuildXL.FrontEnd.Script
             PrimaryConfigurationWorkspace = nonTypeCheckedWorkspace;
 
             return configObjectLiteral;
+        }
+
+        private async Task<ObjectLiteral> ParseInterpretAdditionalConfigFileAndMergeAsync(AbsolutePath additionalConfigPath, ObjectLiteral configObjectLiteral)
+        {
+            Contract.Requires(additionalConfigPath.IsValid);
+
+            // must create a helper NOW (instead of in 'Initialize') because the value of 'Engine' now might be different from the value in 'Initialize'
+            var configHelper = CreateHelper();
+            var parsedConfig = await configHelper.ParseValidateAndConvertConfigFileAsync(additionalConfigPath);
+            if (!parsedConfig.Success)
+            {
+                // Errors should have been reported during parsing.
+                return null;
+            }
+
+            var additionalConfigObjectLiteral = EvaluateAndMergeAdditionalConfigObjectLiteral(parsedConfig.Result, configObjectLiteral);
+            if (additionalConfigObjectLiteral == null)
+            {
+                var configPathString = additionalConfigPath.ToString(Context.PathTable);
+                Logger.ReportSourceResolverConfigurationIsNotObjectLiteral(
+                    Context.LoggingContext,
+                    new Location() { File = configPathString },
+                    frontEndName: null,
+                    configPath: configPathString);
+                return null;
+            }
+
+            // Re-create workspace without typechecking for the purpose of storing it in PrimaryConfigurationWorkspace
+            var nonTypeCheckedWorkspace = await configHelper.ParseAndValidateConfigFileAsync(additionalConfigPath, typecheck: false);
+            Contract.Assert(nonTypeCheckedWorkspace != null && nonTypeCheckedWorkspace.Succeeded);
+            PrimaryConfigurationWorkspace = nonTypeCheckedWorkspace;
+
+            return additionalConfigObjectLiteral;
         }
 
         private ConfigurationConversionHelper CreateHelper()
@@ -222,6 +267,41 @@ namespace BuildXL.FrontEnd.Script
                 }
 
                 return ResolveConfigObjectLiteral(instantiatedModule, context);
+            }
+        }
+
+        private ObjectLiteral EvaluateAndMergeAdditionalConfigObjectLiteral(FileModuleLiteral moduleLiteral, ObjectLiteral configObjectLiteral)
+        {
+            // Instantiate config module, and because config is qualifier-agnositic, it is instantiated with empty qualifier.
+            var instantiatedModule = InstantiateModuleWithDefaultQualifier(moduleLiteral);
+
+            // Decide here whether to use decoration for the config evaluation phase.
+            // Let's say no decorators allowed at this stage.
+            IDecorator<EvaluationResult> decoratorForConfig = null;
+
+            System.Diagnostics.Debugger.Launch();
+
+            // Create an evaluation context tree and root context.
+            using (var contextTree = CreateContext(instantiatedModule, decoratorForConfig, EvaluatorConfigurationForConfig, FileType.GlobalConfiguration))
+            {
+                var context = contextTree.RootContext;
+
+                if (instantiatedModule.IsEmpty)
+                {
+                    return null;
+                }
+
+                // Note: Blocking on evaluation
+                var success = instantiatedModule.EvaluateAllAsync(context, VisitedModuleTracker.Disabled).GetAwaiter().GetResult();
+
+                if (!success)
+                {
+                    // Error has been reported during the evaluation.
+                    return null;
+                }
+
+                var mergedConfigObjectLiteral = configObjectLiteral.Merge(context, EvaluationStackFrame.UnsafeFrom(new EvaluationResult[0]) , new EvaluationResult(ResolveConfigObjectLiteral(instantiatedModule, context)));
+                return (ObjectLiteral)mergedConfigObjectLiteral.Value;
             }
         }
 
