@@ -17,6 +17,7 @@ using BuildXL.Pips;
 using BuildXL.Pips.Artifacts;
 using BuildXL.Pips.Operations;
 using BuildXL.Processes;
+using BuildXL.Scheduler.ChangeAffectedOutput;
 using BuildXL.Scheduler.Fingerprints;
 using BuildXL.Scheduler.Tracing;
 using BuildXL.Storage;
@@ -211,6 +212,8 @@ namespace BuildXL.Scheduler.Artifacts
         private ILocalDiskFileSystemExistenceView m_localDiskFileSystemView;
         private ILocalDiskFileSystemExistenceView LocalDiskFileSystemView => m_localDiskFileSystemView ?? LocalDiskContentStore;
 
+        public AffectedOutputList AffectedOutputList { get; }
+
         /// <summary>
         /// The host for getting data about pips
         /// </summary>
@@ -254,6 +257,8 @@ namespace BuildXL.Scheduler.Artifacts
             {
                 m_outputMaterializationExclusionMap.TryAdd(outputMaterializationExclusionRoot.Value, Unit.Void);
             }
+
+            AffectedOutputList = new AffectedOutputList(host.Context.PathTable, this);
         }
 
         /// <summary>

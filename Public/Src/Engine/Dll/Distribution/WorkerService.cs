@@ -779,6 +779,8 @@ namespace BuildXL.Engine.Distribution
                     file = fileArtifactKeyedHash.File;
                 }
 
+                fileContentManager.AffectedOutputList.ReportSourceChangedAffectedFile(file.Path, fileArtifactKeyedHash.IsSourceAffected);
+
                 var materializationInfo = fileArtifactKeyedHash.GetFileMaterializationInfo(m_environment.Context.PathTable);
                 if (!fileContentManager.ReportWorkerPipInputContent(
                     m_appLoggingContext,
